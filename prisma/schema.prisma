@@ -1,0 +1,508 @@
+// ServiceHub by SynthaxLab Technologies
+// All money is stored as integer kobo (₦1 = 100 kobo). Format at the UI edge only.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ───────── Enums ─────────
+
+enum Role {
+  CLIENT
+  ADMIN
+  SUPER_ADMIN // reserved
+  FINANCE     // reserved
+  SUPPORT     // reserved
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PENDING
+  EXPIRING
+  EXPIRED
+  SUSPENDED
+  CANCELLED
+}
+
+enum BillingCycle {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  ONE_TIME
+  CUSTOM
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CARD
+  BANK_TRANSFER_PAYSTACK
+  BANK_TRANSFER_MANUAL
+}
+
+enum ManualProofStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum DomainRequestStatus {
+  PENDING
+  CHECKING
+  AVAILABLE
+  UNAVAILABLE
+  PAYMENT_PENDING
+  PURCHASED
+  ACTIVE
+  REJECTED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_FOR_CLIENT
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TicketCategory {
+  DOMAIN
+  HOSTING
+  DATABASE
+  WEBSITE
+  PAYMENT
+  ACCOUNT
+  OTHER
+}
+
+enum NotificationType {
+  RENEWAL_REMINDER
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  SERVICE_EXPIRED
+  DOMAIN_REQUEST_UPDATE
+  TICKET_UPDATE
+  SYSTEM
+}
+
+// ───────── Identity ─────────
+
+/// Mirrors a Supabase auth user. id === auth.users.id
+model User {
+  id        String   @id @db.Uuid
+  email     String   @unique
+  fullName  String?
+  role      Role     @default(CLIENT)
+  isActive  Boolean  @default(true)
+  /// Opt-out for notification emails. In-app notifications are always created.
+  emailNotifications Boolean @default(true)
+  clientId  String?
+  client    Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  notifications Notification[]
+  auditLogs     AuditLog[]     @relation("AuditActor")
+  ticketReplies TicketMessage[]
+
+  @@index([clientId])
+  @@index([role])
+}
+
+model Client {
+  id          String   @id @default(cuid())
+  name        String
+  contactName String?
+  email       String
+  phone       String?
+  address     String?
+  isActive    Boolean  @default(true)
+  isDemo      Boolean  @default(false) // clearly marks seeded demo data
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users          User[]
+  projects       Project[]
+  subscriptions  Subscription[]
+  invoices       Invoice[]
+  payments       Payment[]
+  domainRequests DomainRequest[]
+  tickets        SupportTicket[]
+
+  @@index([isActive])
+}
+
+// CLIENT → PROJECT → SERVICE → SUBSCRIPTION
+model Project {
+  id          String   @id @default(cuid())
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  name        String
+  primaryUrl  String?
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  services       Service[]
+  domainRequests DomainRequest[]
+  tickets        SupportTicket[]
+  invoices       Invoice[]
+
+  @@unique([clientId, name])
+  @@index([clientId])
+}
+
+// ───────── Catalogue ─────────
+
+/// Data-driven so new types can be added without a migration.
+model ServiceType {
+  id        String   @id @default(cuid())
+  code      String   @unique // DOMAIN, HOSTING, DATABASE, MAINTENANCE, SSL, EMAIL, OTHER
+  name      String
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+
+  plans    ServicePlan[]
+  services Service[]
+}
+
+/// Global plan with DEFAULT price. Client-specific price lives on Subscription.
+model ServicePlan {
+  id            String       @id @default(cuid())
+  serviceTypeId String
+  serviceType   ServiceType  @relation(fields: [serviceTypeId], references: [id], onDelete: Restrict)
+  name          String
+  description   String?
+  defaultPrice  Int // kobo
+  billingCycle  BillingCycle @default(MONTHLY)
+  specs         Json? // e.g. { "storageGb": 10, "bandwidthGb": 100 }
+  isActive      Boolean      @default(true)
+  archivedAt    DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  subscriptions Subscription[]
+
+  @@unique([serviceTypeId, name])
+  @@index([serviceTypeId, isActive])
+}
+
+// ───────── Delivered services ─────────
+
+/// A concrete service belonging to a project (e.g. "ravers.ng database").
+model Service {
+  id            String      @id @default(cuid())
+  projectId     String
+  project       Project     @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  serviceTypeId String
+  serviceType   ServiceType @relation(fields: [serviceTypeId], references: [id], onDelete: Restrict)
+  name          String // "ravers.ng", "PostgreSQL Standard"
+  provider      String? // informational only in V1
+  details       Json? // domain name, db type, etc.
+  usageUsed     Decimal?    @db.Decimal(14, 3) // informational
+  usageLimit    Decimal?    @db.Decimal(14, 3)
+  usageUnit     String? // "GB"
+  notes         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  subscriptions Subscription[]
+  tickets       SupportTicket[]
+
+  @@index([projectId])
+  @@index([serviceTypeId])
+}
+
+model Subscription {
+  id              String             @id @default(cuid())
+  clientId        String
+  client          Client             @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  serviceId       String
+  service         Service            @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  planId          String
+  plan            ServicePlan        @relation(fields: [planId], references: [id], onDelete: Restrict)
+  /// Price actually charged (kobo). Copied from plan default unless negotiated.
+  price           Int
+  /// Snapshot of plan default when price was set, so admins see default vs custom.
+  defaultPriceAtSet Int
+  isCustomPrice   Boolean            @default(false)
+  billingCycle    BillingCycle
+  customCycleDays Int?
+  status          SubscriptionStatus @default(PENDING)
+  autoRenew       Boolean            @default(false)
+  startDate       DateTime
+  nextBillingDate DateTime?
+  endedAt         DateTime?
+  notes           String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  invoiceItems InvoiceItem[]
+  reminders    ReminderLog[]
+
+  @@index([clientId])
+  @@index([serviceId])
+  @@index([status, nextBillingDate])
+}
+
+/// Prevents duplicate reminders from the cron job.
+model ReminderLog {
+  id             String       @id @default(cuid())
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  /// e.g. "T-14", "T-7", "T-3", "T-0", "T+1"
+  stage          String
+  billingDate    DateTime // the nextBillingDate this reminder was for
+  sentAt         DateTime     @default(now())
+
+  @@unique([subscriptionId, stage, billingDate])
+}
+
+// ───────── Billing ─────────
+
+model Invoice {
+  id           String        @id @default(cuid())
+  number       String        @unique // SLX-INV-00001
+  clientId     String
+  client       Client        @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  projectId    String?
+  project      Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  description  String
+  periodStart  DateTime?
+  periodEnd    DateTime?
+  subtotal     Int // kobo
+  tax          Int           @default(0)
+  total        Int
+  currency     String        @default("NGN")
+  status       InvoiceStatus @default(PENDING)
+  dueDate      DateTime
+  paidAt       DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  items    InvoiceItem[]
+  payments Payment[]
+
+  @@index([clientId, status])
+  @@index([status, dueDate])
+}
+
+model InvoiceItem {
+  id             String        @id @default(cuid())
+  invoiceId      String
+  invoice        Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  description    String
+  quantity       Int           @default(1)
+  unitPrice      Int
+  amount         Int
+  /// Period this item extends the subscription by (applied only on verified payment)
+  periodStart    DateTime?
+  periodEnd      DateTime?
+
+  @@index([invoiceId])
+  @@index([subscriptionId])
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  reference       String        @unique // SLX-PAY-00001 (also sent to Paystack)
+  invoiceId       String
+  invoice         Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  clientId        String
+  client          Client        @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  amount          Int // kobo, must equal invoice.total for full payment
+  currency        String        @default("NGN")
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  gateway         String? // "paystack" | "manual"
+  gatewayRef      String?       @unique // Paystack transaction reference/id
+  verifiedAt      DateTime?
+  failureReason   String?
+  rawGatewayData  Json? // verified server response only
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  manualProof ManualPaymentProof?
+
+  @@index([clientId, status])
+  @@index([invoiceId])
+}
+
+model ManualPaymentProof {
+  id                String            @id @default(cuid())
+  paymentId         String            @unique
+  payment           Payment           @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  declaredAmount    Int
+  transferReference String
+  proofStoragePath  String? // Supabase Storage (private bucket)
+  status            ManualProofStatus @default(SUBMITTED)
+  reviewedById      String?
+  reviewedAt        DateTime?
+  reviewNote        String?
+  createdAt         DateTime          @default(now())
+}
+
+/// Idempotency + audit for gateway webhooks.
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  provider    String
+  eventId     String // provider event id or reference+event type
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  error       String?
+  receivedAt  DateTime  @default(now())
+
+  @@unique([provider, eventId])
+}
+
+// ───────── Requests & support ─────────
+
+model DomainRequest {
+  id               String              @id @default(cuid())
+  clientId         String
+  client           Client              @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  projectId        String?
+  project          Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  domain           String
+  durationYears    Int                 @default(1)
+  purpose          String?
+  notes            String?
+  status           DomainRequestStatus @default(PENDING)
+  registrarCost    Int? // kobo, admin only
+  clientPrice      Int? // kobo
+  invoiceId        String?
+  adminNotes       String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@index([clientId])
+  @@index([status])
+}
+
+model SupportTicket {
+  id          String         @id @default(cuid())
+  number      String         @unique
+  clientId    String
+  client      Client         @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  projectId   String?
+  project     Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  serviceId   String?
+  service     Service?       @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  subject     String
+  description String
+  category    TicketCategory
+  priority    TicketPriority @default(MEDIUM)
+  status      TicketStatus   @default(OPEN)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  messages TicketMessage[]
+
+  @@index([clientId, status])
+  @@index([status])
+}
+
+model TicketMessage {
+  id         String        @id @default(cuid())
+  ticketId   String
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorId   String        @db.Uuid
+  author     User          @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  body       String
+  isInternal Boolean       @default(false) // admin-only notes
+  createdAt  DateTime      @default(now())
+
+  @@index([ticketId])
+}
+
+// ───────── Platform ─────────
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String           @db.Uuid
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  emailedAt DateTime?
+  /// Email outbox state: PENDING | SENDING | SENT | SKIPPED | FAILED
+  emailStatus    String    @default("PENDING")
+  emailAttempts  Int       @default(0)
+  emailClaimedAt DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([emailStatus, createdAt])
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?  @db.Uuid
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action     String // e.g. "subscription.price_changed"
+  entity     String // e.g. "Subscription"
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+/// Key/value settings (company info, tax, currency, support config).
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+/// Atomic sequence counters for human-readable numbers (SLX-INV-00001, SLX-PAY-00001).
+model Counter {
+  name  String @id
+  value Int
+}
+
+/// Fixed-window rate limiter state (serverless-safe: lives in the DB, not in memory).
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+
+  @@index([resetAt])
+}

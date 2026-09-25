@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { color-scheme: dark; }
+  body { @apply bg-navy text-ink antialiased; }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-accent-soft; }
+}
+
+/* Phones: table rows become cards. Labels come from data-label (set by ResponsiveTable). */
+@media (max-width: 767px) {
+  .rt table, .rt tbody, .rt tr, .rt td { display: block; width: 100%; }
+  .rt thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .rt tr { border-bottom: 1px solid theme("colors.line"); padding: 0.5rem 0; }
+  .rt tr:last-child { border-bottom: 0; }
+  .rt td { display: flex; justify-content: space-between; gap: 1rem; border: 0; padding: 0.3rem 1rem; text-align: right; }
+  .rt td > * { min-width: 0; }
+  .rt td::before {
+    content: attr(data-label); flex-shrink: 0; text-align: left; color: theme("colors.muted");
+    font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; padding-top: 0.15rem;
+  }
+}

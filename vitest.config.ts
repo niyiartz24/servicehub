@@ -1,0 +1,13 @@
+import { fileURLToPath } from "node:url";
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: { environment: "node", include: ["src/**/*.test.ts"] },
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      // `server-only` throws when imported outside a Next.js server build; stub it for unit tests.
+      "server-only": fileURLToPath(new URL("./tests/stubs/server-only.ts", import.meta.url)),
+    },
+  },
+});
