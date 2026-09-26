@@ -8,6 +8,7 @@ import { createClientAccount, setClientActive, updateClientAccount } from "@/ser
 import { createProject } from "@/server/services/projects";
 import { createPlan, removePlan, setPlanActive, updatePlan } from "@/server/services/plans";
 import { assignService, updateSubscription } from "@/server/services/subscriptions";
+import { deleteUnusedService, updateServiceDetails } from "@/server/services/services-admin";
 
 // Auth runs OUTSIDE try/catch so redirects from requireAdmin propagate.
 
@@ -97,4 +98,22 @@ export async function updateSubscriptionAction(_: ActionState, fd: FormData): Pr
     revalidatePath(`/admin/subscriptions/${input.id}`);
     return { ok: "Subscription updated." };
   } catch (e) { return toErrorState(e); }
+}
+
+export async function updateServiceAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const admin = await requireAdmin("subscriptions:manage");
+  try {
+    const input = parseForm(v.serviceUpdateSchema, fd);
+    await updateServiceDetails(admin.id, input);
+    revalidatePath("/admin/services");
+    revalidatePath(`/admin/services/${input.id}`);
+    return { ok: "Service updated." };
+  } catch (e) { return toErrorState(e); }
+}
+
+export async function deleteServiceAction(fd: FormData): Promise<void> {
+  const admin = await requireAdmin("subscriptions:manage");
+  const id = String(fd.get("id") ?? "");
+  await deleteUnusedService(admin.id, id); // no-ops if the service has subscription history
+  revalidatePath("/admin/services");
 }
