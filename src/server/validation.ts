@@ -122,3 +122,15 @@ export type DomainAdminInput = z.output<typeof domainAdminSchema>;
 export type TicketInput = z.output<typeof ticketSchema>;
 export type AdminTicketInput = z.output<typeof adminTicketSchema>;
 export type ManualPaymentInput = z.output<typeof manualPaymentSchema>;
+
+// ───────── Admin: /admin/services ─────────
+export const serviceUpdateSchema = z.object({
+  id,
+  name: reqStr(160),
+  provider: optStr(120),
+  usageUsed: z.preprocess(blank, z.coerce.number().min(0).optional()),
+  usageLimit: z.preprocess(blank, z.coerce.number().positive().optional()),
+  usageUnit: optStr(20),
+  notes: optStr(1000),
+});
+export type ServiceUpdateInput = z.output<typeof serviceUpdateSchema>;
