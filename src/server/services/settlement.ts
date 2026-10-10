@@ -5,6 +5,7 @@ import { formatNaira } from "@/config/brand";
 import { getGatewayByName } from "@/server/payments";
 import { audit } from "./audit";
 import { notifyAdmins, notifyClient } from "./notifications";
+import { scheduleReceiptEmail } from "@/server/email/schedule";
 
 export type SettleOutcome = "paid" | "already_paid" | "pending" | "failed" | "mismatch" | "duplicate" | "unknown_reference";
 export type PaymentWithItems = Prisma.PaymentGetPayload<{ include: { invoice: { include: { items: true } } } }>;
@@ -67,7 +68,8 @@ export async function applyPaid(
     type: "PAYMENT_SUCCESS", title: "Payment successful",
     body: `Your payment of ${formatNaira(payment.amount)} was successful. Reference ${payment.reference}.`,
     link: `/payments/${payment.id}`,
-  });
+  }, { skipEmail: true }); // the PDF receipt email below replaces the generic notification email
+  scheduleReceiptEmail(payment.id);
   return "paid";
 }
 

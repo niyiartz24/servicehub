@@ -7,12 +7,14 @@ import { scheduleEmailFlush } from "@/server/email/schedule";
 type Runner = Prisma.TransactionClient | typeof db;
 export type NotificationPayload = { type: NotificationType; title: string; body: string; link?: string };
 
-// Rows are created in the caller's transaction. Emails go out after the response, from the outbox.
-export async function notifyClient(runner: Runner, clientId: string, p: NotificationPayload) {
+/** skipEmail: true means create the in-app notification only — used where a richer dedicated email (e.g. the receipt) replaces the generic one. */
+export async function notifyClient(runner: Runner, clientId: string, p: NotificationPayload, opts: { skipEmail?: boolean } = {}) {
   const users = await runner.user.findMany({ where: { clientId, isActive: true, role: "CLIENT" }, select: { id: true } });
   if (users.length) {
-    await runner.notification.createMany({ data: users.map((u) => ({ userId: u.id, ...p })) });
-    scheduleEmailFlush();
+    await runner.notification.createMany({
+      data: users.map((u) => ({ userId: u.id, ...p, ...(opts.skipEmail ? { emailStatus: "SKIPPED" } : {}) })),
+    });
+    if (!opts.skipEmail) scheduleEmailFlush();
   }
 }
 

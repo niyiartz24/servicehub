@@ -15,7 +15,6 @@ export default async function PaymentDetailPage({ params }: { params: Promise<{ 
   let p = await getClientPayment(user.clientId, id);
   if (!p) notFound();
   if (p.status === "PENDING" && p.method !== "BANK_TRANSFER_MANUAL") {
-    // Server-side re-verification, so a missed webhook can't leave a paid invoice looking unpaid.
     await settlePayment(p.reference).catch((e) => console.error("Verify-on-view failed", e));
     p = (await getClientPayment(user.clientId, id)) ?? p;
   }
@@ -33,7 +32,12 @@ export default async function PaymentDetailPage({ params }: { params: Promise<{ 
         { label: "Billing period", value: formatPeriod(p.invoice.periodStart, p.invoice.periodEnd) },
       ]} />
       <AutoRefresh active={p.status === "PENDING" && p.method !== "BANK_TRANSFER_MANUAL"} />
-      {p.status === "PAID" && <p role="status" className="text-sm text-emerald-300">Payment confirmed. Your service has been updated.</p>}
+      {p.status === "PAID" && (
+        <div className="flex flex-wrap items-center gap-4">
+          <p role="status" className="text-sm text-emerald-300">Payment confirmed. Your service has been updated.</p>
+          <a href={`/api/receipts/${p.id}`} className="rounded-md border border-line px-4 py-2 text-sm hover:bg-surface">Download receipt (PDF)</a>
+        </div>
+      )}
       {p.status === "PENDING" && p.method === "BANK_TRANSFER_MANUAL" && <p className="text-sm text-muted">Awaiting confirmation by SynthaxLab. We will notify you once it is reviewed.</p>}
       {p.status === "PENDING" && p.method !== "BANK_TRANSFER_MANUAL" && (
         <p className="text-sm text-muted">Payment verification is taking longer than expected? It can take a few minutes. Contact support if it stays pending.</p>
