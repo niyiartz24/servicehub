@@ -1,6 +1,6 @@
 import "server-only";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { brand, formatNaira } from "@/config/brand";
+import { brand } from "@/config/brand";
 import { formatDate } from "@/lib/format";
 import type { ReceiptData } from "@/server/services/receipts";
 
@@ -11,6 +11,16 @@ const hex = (c: string) => {
 const muted = rgb(0.42, 0.45, 0.52);
 const ink = rgb(0.08, 0.09, 0.12);
 const faint = rgb(0.9, 0.9, 0.93);
+
+/**
+ * pdf-lib's built-in fonts use WinAnsi encoding, which has no glyph for ₦ (U+20A6).
+ * Use "NGN" inside the PDF only — formatNaira() elsewhere (web, email) keeps the real symbol.
+ */
+const money = (kobo: number) => {
+  const naira = kobo / 100;
+  const whole = Number.isInteger(naira);
+  return `NGN ${naira.toLocaleString("en-NG", { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 })}`;
+};
 
 export async function generateReceiptPdf(data: ReceiptData): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -64,8 +74,8 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<Uint8Array>
   for (const item of data.items) {
     page.drawText(item.description.slice(0, 48), { x: col.desc, y, size: 10, font, color: ink });
     page.drawText(String(item.quantity), { x: col.qty, y, size: 10, font, color: ink });
-    page.drawText(formatNaira(item.unitPrice), { x: col.unit, y, size: 10, font, color: ink });
-    page.drawText(formatNaira(item.amount), { x: col.amt, y, size: 10, font, color: ink });
+    page.drawText(money(item.unitPrice), { x: col.unit, y, size: 10, font, color: ink });
+    page.drawText(money(item.amount), { x: col.amt, y, size: 10, font, color: ink });
     y -= 20;
   }
 
@@ -77,13 +87,13 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<Uint8Array>
     page.drawText(val, { x: col.amt, y, size: 10, font: isTotal ? bold : font, color: ink });
     y -= 16;
   };
-  row("Subtotal", formatNaira(data.subtotal));
-  if (data.tax > 0) row("Tax", formatNaira(data.tax));
-  row("Total paid", formatNaira(data.total), true);
+  row("Subtotal", money(data.subtotal));
+  if (data.tax > 0) row("Tax", money(data.tax));
+  row("Total paid", money(data.total), true);
 
   page.drawLine({ start: { x: left, y: 70 }, end: { x: right, y: 70 }, thickness: 0.5, color: faint });
   page.drawText(`${brand.lockup}. This receipt confirms payment received.`, { x: left, y: 50, size: 8, font, color: muted });
   page.drawText(brand.contact.email, { x: left, y: 38, size: 8, font, color: muted });
 
   return doc.save();
-}
+    }
